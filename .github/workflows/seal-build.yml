@@ -1,0 +1,47 @@
+name: seal-build
+
+on: [push, workflow_dispatch]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+
+      - name: Build module zip
+        run: |
+          set -euxo pipefail
+          HELPER="$(mktemp -d)"
+          cp "$GITHUB_WORKSPACE/.github/create_mod.go" "$HELPER/create_mod.go"
+          cd "$HELPER"
+          go mod init example.com/mod
+          go get golang.org/x/mod@v0.24.0
+          go mod tidy
+          go build -o create_mod create_mod.go
+          mkdir -p "$RUNNER_TEMP/out"
+          # x/mod zip.CreateFromDir descends into .github and would leak the
+          # workflow + helper into the zip as extra files (upstream ships no
+          # .github). Remove it right before packaging; dotfiles like
+          # .gitignore/.gitattributes are part of the public proxy zip, so keep them.
+          rm -rf "$GITHUB_WORKSPACE/.github"
+          ./create_mod golang.org/x/net v0.45.0 "$GITHUB_WORKSPACE" "$RUNNER_TEMP/out/v0.45.0.zip"
+
+      - name: Upload module zip
+        uses: actions/upload-artifact@v4
+        with:
+          name: module-zip
+          path: ${{ runner.temp }}/out/v0.45.0.zip
+          if-no-files-found: error
+
+      - name: Test
+        run: |
+          set -euxo pipefail
+          cd "$GITHUB_WORKSPACE"
+          go build ./...
+          go test ./...
